@@ -3,9 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <title>Game Show</title>
-  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans&display=swap" rel="stylesheet">
   <style>
-    body { font-family: 'Noto Sans', sans-serif; background:#b3cde0; margin:0; padding:20px; text-align:center; }
+    body { font-family: Arial, Helvetica, sans-serif; background:#b3cde0; margin:0; padding:20px; text-align:center; }
     .panel { background:rgba(255,255,255,0.9); padding:16px; border-radius:10px; margin:12px auto; max-width:800px; }
     button { margin:6px; padding:10px 16px; border:none; border-radius:8px; cursor:pointer; }
     .btn.red { background:crimson; color:white; }
@@ -33,9 +32,13 @@
     <select id="role"><option value="A">Player A</option><option value="B">Player B</option></select>
     <input id="name" placeholder="Your name">
     <button onclick="setName()">Set Name</button>
-    <div>
-      <button class="btn red" onclick="sendChoice('red')">Red</button>
-      <button class="btn green" onclick="sendChoice('green')">Green</button>
+    <div id="controlsA">
+      <button class="btn red" id="btnARed" onclick="sendChoice('red')">Red (A)</button>
+      <button class="btn green" id="btnAGreen" onclick="sendChoice('green')">Green (A)</button>
+    </div>
+    <div id="controlsB">
+      <button class="btn red" id="btnBRed" onclick="sendChoice('red')">Red (B)</button>
+      <button class="btn green" id="btnBGreen" onclick="sendChoice('green')">Green (B)</button>
     </div>
     <div id="scoreboard">
       <p>Round: <span id="round">1</span>/30</p>
@@ -47,29 +50,28 @@
     </div>
     <button onclick="replay()">Replay</button>
     <button onclick="reset()">Reset</button>
+    <button onclick="backToLobby()">Back to Lobby</button>
   </div>
 
   <!-- Spectator view -->
   <div class="panel" id="spectatorView" style="display:none;">
     <h2>Spectator Mode</h2>
     <div id="spectatorBoard"></div>
+    <button onclick="backToLobby()">Back to Lobby</button>
   </div>
 
   <div id="history"><h3>History</h3><div id="historyList"></div></div>
 
   <script>
-    // ===== Configuration =====
-    const API = "https://titfortat-gecs.onrender.com"; // replace with your deployed server base URL
+    const API = "https://titfortat-gecs.onrender.com"; // replace with your deployed server
     const POLL_MS = 2000;
     const MAX_SCORE = 150;
 
-    // ===== Runtime state =====
     let gameId = null;
     let myRole = "A";
     let pollTimer = null;
     let spectating = false;
 
-    // ===== DOM refs =====
     const refs = {
       lobby: document.getElementById('lobby'),
       playerView: document.getElementById('playerView'),
@@ -90,40 +92,57 @@
       spectatorBoard: document.getElementById('spectatorBoard')
     };
 
-    // ===== Lobby actions =====
+    async function safeFetch(url, options) {
+      try {
+        const res = await fetch(url, options);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+      } catch (err) {
+        showToast("Network or server error.");
+        return null;
+      }
+    }
+    function showToast(msg) {
+      const t = document.createElement('div');
+      t.textContent = msg;
+      t.style.cssText = "position:fixed; bottom:20px; left:20px; background:#333; color:#fff; padding:8px 12px; border-radius:8px;";
+      document.body.appendChild(t);
+      setTimeout(() => t.remove(), 2000);
+    }
+
     async function createGame() {
-      const res = await fetch(API + "/create", { method: "POST" });
-      const data = await res.json();
+      const data = await safeFetch(API + "/create", { method: "POST" });
+      if (!data) return;
       gameId = data.gameId;
       alert("Game created! Share this room code: " + gameId);
       enterPlayerView();
     }
-
     async function joinGame() {
       const id = refs.joinId.value.trim();
-      if (!id) return alert("Enter a room code to join.");
+      if (!id) return alert("Enter a room code.");
+      const state = await safeFetch(`${API}/state/${id}`);
+      if (!state) return;
       gameId = id;
       enterPlayerView();
     }
-
     async function loadLobby() {
-      const res = await fetch(API + "/games");
-      const list = await res.json();
+      const list = await safeFetch(API + "/games");
+      if (!list) return;
       refs.gameList.innerHTML = list.map(g => `
-        <div style="margin:6px 0; display:flex; gap:8px; align-items:center; justify-content:center;">
+        <div style="margin:6px 0;">
           <code>${g.id}</code> — ${escapeHtml(g.names.A)} vs ${escapeHtml(g.names.B)}, Round ${g.round} ${g.finished ? '(Finished)' : ''}
           <button onclick="watchGame('${g.id}')">Watch</button>
           <button onclick="joinExisting('${g.id}')">Join</button>
         </div>
       `).join('');
     }
-
-    function joinExisting(id) {
+    async function joinExisting(id) {
+      const state = await safeFetch(`${API}/state/${id}`);
+      if (!state) return;
       gameId = id;
       enterPlayerView();
     }
 
-    // ===== Modes =====
     function enterPlayerView() {
       spectating = false;
       refs.lobby.style.display = 'none';
@@ -131,81 +150,86 @@
       refs.spectatorView.style.display = 'none';
       startPolling();
     }
-
     function enterSpectatorView() {
       spectating = true;
       refs.lobby.style.display = 'none';
       refs.playerView.style.display = 'none';
       refs.spectatorView.style.display = 'block';
-      startPolling(true);
+      startPolling();
     }
-
     async function watchGame(id) {
       gameId = id;
       enterSpectatorView();
     }
+    function backToLobby() {
+      if (pollTimer) clearInterval(pollTimer);
+      pollTimer = null;
+      gameId = null;
+      spectating = false;
+      refs.lobby.style.display = 'block';
+      refs.playerView.style.display = 'none';
+      refs.spectatorView.style.display = 'none';
+      loadLobby();
+    }
 
-    // ===== Player actions =====
     async function setName() {
       myRole = refs.role.value;
       const name = refs.name.value.trim();
       if (!gameId) return alert("Join or create a game first.");
-      await fetch(`${API}/setName/${gameId}`, {
+      await safeFetch(`${API}/setName/${gameId}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ role: myRole, name })
-      });
-      await refresh();
-    }
+    });
+    await refresh();
+  }
 
-    async function sendChoice(color) {
-      if (!gameId) return alert("Join or create a game first.");
-      await fetch(`${API}/choice/${gameId}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ role: myRole, color })
-      });
-      await refresh();
-    }
+  async function sendChoice(color) {
+    if (!gameId) return alert("Join or create a game first.");
+    await safeFetch(`${API}/choice/${gameId}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ role: myRole, color })
+    });
+    await refresh();
+  }
 
-    async function replay() {
-      if (!gameId) return;
-      await fetch(`${API}/replay/${gameId}`, { method: "POST" });
-      await refresh();
-    }
+  async function replay() {
+    if (!gameId) return;
+    await safeFetch(`${API}/replay/${gameId}`, { method: "POST" });
+    await refresh();
+  }
 
-    async function reset() {
-      if (!gameId) return;
-      await fetch(`${API}/reset/${gameId}`, { method: "POST" });
-      await refresh();
-    }
+  async function reset() {
+    if (!gameId) return;
+    await safeFetch(`${API}/reset/${gameId}`, { method: "POST" });
+    await refresh();
+  }
 
-    // ===== Polling =====
-    function startPolling(spectate = false) {
-      if (pollTimer) clearInterval(pollTimer);
-      pollTimer = setInterval(refresh, POLL_MS);
-      refresh(); // immediate
-    }
+  // ===== Polling =====
+  function startPolling() {
+    if (pollTimer) clearInterval(pollTimer);
+    pollTimer = setInterval(refresh, POLL_MS);
+    refresh(); // immediate
+  }
 
-    async function refresh() {
-      if (!gameId) return;
-      const endpoint = spectating ? `/spectate/${gameId}` : `/state/${gameId}`;
-      const res = await fetch(API + endpoint);
-      if (!res.ok) return;
-      const state = await res.json();
-      renderState(state);
-    }
+  async function refresh() {
+    if (!gameId) return;
+    const endpoint = spectating ? `/spectate/${gameId}` : `/state/${gameId}`;
+    const state = await safeFetch(API + endpoint);
+    if (!state) return;
+    renderState(state);
+  }
 
-    // ===== Rendering =====
-    function renderState(state) {
-      // Scores, names, round
+  // ===== Rendering =====
+  function renderState(state) {
+    if (!spectating) {
       refs.labelA.textContent = state.names.A;
       refs.labelB.textContent = state.names.B;
       refs.scoreA.textContent = state.scoreA;
       refs.scoreB.textContent = state.scoreB;
       refs.round.textContent = Math.min(state.round, 30);
 
-      // Progress bars
       const pctA = Math.min(100, (state.scoreA / MAX_SCORE) * 100);
       const pctB = Math.min(100, (state.scoreB / MAX_SCORE) * 100);
       refs.barA.style.width = pctA + '%';
@@ -213,55 +237,70 @@
       refs.barA.textContent = Math.round(pctA) + '%';
       refs.barB.textContent = Math.round(pctB) + '%';
 
-      // Result message
       refs.result.textContent = state.message || '';
 
-      // History
-      refs.historyList.innerHTML = state.history.map(item => `
-        <div>
-          Round ${item.round}: ${escapeHtml(state.names.A)} chose ${escapeHtml(item.aChoice)}, 
-          ${escapeHtml(state.names.B)} chose ${escapeHtml(item.bChoice)} 
-          → ${escapeHtml(state.names.A)}: ${item.scoreA}, ${escapeHtml(state.names.B)}: ${item.scoreB}
+      // Enable/disable buttons by role
+      const aCanPlay = !state.finished && myRole === 'A' && !state.choices?.A;
+      const bCanPlay = !state.finished && myRole === 'B' && !state.choices?.B;
+      toggleDisabled('btnARed', !aCanPlay);
+      toggleDisabled('btnAGreen', !aCanPlay);
+      toggleDisabled('btnBRed', !bCanPlay);
+      toggleDisabled('btnBGreen', !bCanPlay);
+    }
+
+    // History
+    refs.historyList.innerHTML = state.history.map(item => `
+      <div>
+        Round ${item.round}: ${escapeHtml(state.names.A)} chose ${escapeHtml(item.aChoice)}, 
+        ${escapeHtml(state.names.B)} chose ${escapeHtml(item.bChoice)} 
+        → ${escapeHtml(state.names.A)}: ${item.scoreA}, ${escapeHtml(state.names.B)}: ${item.scoreB}
+      </div>
+    `).join('');
+    const historyPanel = document.getElementById('history');
+    historyPanel.scrollTop = historyPanel.scrollHeight;
+
+    // Spectator board
+    if (spectating) {
+      const pctA = Math.min(100, (state.scoreA / MAX_SCORE) * 100);
+      const pctB = Math.min(100, (state.scoreB / MAX_SCORE) * 100);
+      refs.spectatorBoard.innerHTML = `
+        <div style="font-size:20px; margin-bottom:10px;">
+          Round ${Math.min(state.round, 30)} / 30
         </div>
-      `).join('');
-      const historyPanel = document.getElementById('history');
-      historyPanel.scrollTop = historyPanel.scrollHeight;
-
-      // Spectator board (large view text)
-      if (spectating) {
-        refs.spectatorBoard.innerHTML = `
-          <div style="font-size:20px; margin-bottom:10px;">
-            Round ${Math.min(state.round, 30)} / 30
-          </div>
-          <div style="display:grid; grid-template-columns: 1fr auto; gap:10px; align-items:center;">
-            <div style="text-align:left; font-weight:bold;">${escapeHtml(state.names.A)}</div>
-            <div>${state.scoreA}</div>
-          </div>
-          <div class="progress"><div class="bar" style="width:${pctA}%; text-align:right; padding-right:6px;">${Math.round(pctA)}%</div></div>
-          <div style="height:8px;"></div>
-          <div style="display:grid; grid-template-columns: 1fr auto; gap:10px; align-items:center;">
-            <div style="text-align:left; font-weight:bold;">${escapeHtml(state.names.B)}</div>
-            <div>${state.scoreB}</div>
-          </div>
-          <div class="progress"><div class="bar" style="width:${pctB}%; text-align:right; padding-right:6px;">${Math.round(pctB)}%</div></div>
-          <div id="resultSpectator" style="font-weight:bold; font-size:22px; margin-top:12px;">${escapeHtml(state.message || '')}</div>
-        `;
-      }
+        <div style="display:grid; grid-template-columns: 1fr auto; gap:10px; align-items:center;">
+          <div style="text-align:left; font-weight:bold;">${escapeHtml(state.names.A)}</div>
+          <div>${state.scoreA}</div>
+        </div>
+        <div class="progress"><div class="bar" style="width:${pctA}%; text-align:right; padding-right:6px;">${Math.round(pctA)}%</div></div>
+        <div style="height:8px;"></div>
+        <div style="display:grid; grid-template-columns: 1fr auto; gap:10px; align-items:center;">
+          <div style="text-align:left; font-weight:bold;">${escapeHtml(state.names.B)}</div>
+          <div>${state.scoreB}</div>
+        </div>
+        <div class="progress"><div class="bar" style="width:${pctB}%; text-align:right; padding-right:6px;">${Math.round(pctB)}%</div></div>
+        <div id="resultSpectator" style="font-weight:bold; font-size:22px; margin-top:12px;">${escapeHtml(state.message || '')}</div>
+      `;
     }
+  }
 
-    // ===== Utilities =====
-    function escapeHtml(str) {
-      if (str == null) return '';
-      return String(str)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#039;');
-    }
+  function toggleDisabled(id, disabled) {
+    const el = document.getElementById(id);
+    if (el) el.disabled = disabled;
+  }
 
-    // Initial lobby load
-    loadLobby();
+  // ===== Utilities =====
+  function escapeHtml(str) {
+    if (str == null) return '';
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+  }
+
+  // Initial lobby load
+  loadLobby();
   </script>
 </body>
 </html>

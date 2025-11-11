@@ -40,7 +40,7 @@ function winnerMessage(game) {
 }
 
 function makeId() {
-  // 12 hex chars ~ 48 bits; adjust length as needed
+  // 12 hex chars ~ 48 bits; adjust length if you want larger IDs
   return randomBytes(6).toString('hex');
 }
 
@@ -142,9 +142,7 @@ app.post('/replay/:id', (req, res) => {
 // Reset: reset everything including names
 app.post('/reset/:id', (req, res) => {
   const id = req.params.id;
-  if (!games[id]) {
-    return res.status(404).json({ error: 'Game not found' });
-  }
+  if (!games[id]) return res.status(404).json({ error: 'Game not found' });
   games[id] = newGame();
   res.json(games[id]);
 });

@@ -1,11 +1,11 @@
-// Install: npm install express cors body-parser
+// Install: npm install express cors
 const express = require('express');
 const cors = require('cors');
-const bodyParser = require('body-parser');
+const { randomBytes } = require('crypto');
 
 const app = express();
-app.use(cors());
-app.use(bodyParser.json());
+app.use(cors()); // consider restricting origin in production
+app.use(express.json());
 
 const MAX_ROUNDS = 30;
 
@@ -36,14 +36,19 @@ function applyRules(game) {
 function winnerMessage(game) {
   if (game.scoreA > game.scoreB) return `The winner is... ${game.names.A}`;
   if (game.scoreB > game.scoreA) return `The winner is... ${game.names.B}`;
-  return 'The winner is... It\'s a Tie!';
+  return "The winner is... It's a Tie!";
+}
+
+function makeId() {
+  // 12 hex chars ~ 48 bits; adjust length as needed
+  return randomBytes(6).toString('hex');
 }
 
 // Create a new game and return its ID
 app.post('/create', (req, res) => {
-  const id = Math.random().toString(36).slice(2, 8);
+  const id = makeId();
   games[id] = newGame();
-  res.json({ gameId: id });
+  res.status(201).json({ gameId: id });
 });
 
 // List all active games (for lobby)
@@ -64,7 +69,7 @@ app.get('/state/:id', (req, res) => {
   res.json({ ...game, message: game.finished ? winnerMessage(game) : '' });
 });
 
-// Get full state for spectators (same as state, no role needed)
+// Get full state for spectators (same as state)
 app.get('/spectate/:id', (req, res) => {
   const game = games[req.params.id];
   if (!game) return res.status(404).json({ error: 'Game not found' });
@@ -76,9 +81,13 @@ app.post('/setName/:id', (req, res) => {
   const game = games[req.params.id];
   if (!game) return res.status(404).json({ error: 'Game not found' });
   const { role, name } = req.body;
-  if (role === 'A' || role === 'B') {
-    game.names[role] = (name || '').trim() || game.names[role];
+  if (role !== 'A' && role !== 'B') {
+    return res.status(400).json({ error: 'Invalid role. Must be "A" or "B".' });
   }
+  if (typeof name !== 'string' || !name.trim()) {
+    return res.status(400).json({ error: 'Invalid name.' });
+  }
+  game.names[role] = name.trim();
   res.json(game);
 });
 
@@ -88,28 +97,34 @@ app.post('/choice/:id', (req, res) => {
   if (!game) return res.status(404).json({ error: 'Game not found' });
 
   const { role, color } = req.body;
+
   if (game.finished) {
     return res.json({ ...game, message: winnerMessage(game) });
   }
 
-  if ((role === 'A' || role === 'B') && (color === 'red' || color === 'green')) {
-    game.choices[role] = color;
+  if (role !== 'A' && role !== 'B') {
+    return res.status(400).json({ error: 'Invalid role. Must be "A" or "B".' });
+  }
+  if (color !== 'red' && color !== 'green') {
+    return res.status(400).json({ error: 'Invalid color. Must be "red" or "green".' });
+  }
 
-    // If both have chosen, score round and advance
-    if (game.choices.A && game.choices.B) {
-      applyRules(game);
-      game.history.push({
-        round: game.round,
-        aChoice: game.choices.A,
-        bChoice: game.choices.B,
-        scoreA: game.scoreA,
-        scoreB: game.scoreB
-      });
-      game.choices = { A: null, B: null };
-      game.round += 1;
-      if (game.round > MAX_ROUNDS) {
-        game.finished = true;
-      }
+  game.choices[role] = color;
+
+  // If both have chosen, score round and advance
+  if (game.choices.A && game.choices.B) {
+    applyRules(game);
+    game.history.push({
+      round: game.round,
+      aChoice: game.choices.A,
+      bChoice: game.choices.B,
+      scoreA: game.scoreA,
+      scoreB: game.scoreB
+    });
+    game.choices = { A: null, B: null };
+    game.round += 1;
+    if (game.round > MAX_ROUNDS) {
+      game.finished = true;
     }
   }
 
@@ -126,10 +141,15 @@ app.post('/replay/:id', (req, res) => {
 
 // Reset: reset everything including names
 app.post('/reset/:id', (req, res) => {
-  games[req.params.id] = newGame();
-  res.json(games[req.params.id]);
+  const id = req.params.id;
+  if (!games[id]) {
+    return res.status(404).json({ error: 'Game not found' });
+  }
+  games[id] = newGame();
+  res.json(games[id]);
 });
 
-app.listen(3000, () => {
-  console.log('Server running on http://localhost:3000');
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`Server running on http://localhost:${PORT}`);
 });

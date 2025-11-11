@@ -8,7 +8,9 @@ app.use(cors());
 app.use(bodyParser.json());
 
 const MAX_ROUNDS = 30;
-let games = {};
+
+// In-memory store of games keyed by gameId
+const games = {};
 
 function newGame() {
   return {
@@ -37,16 +39,14 @@ function winnerMessage(game) {
   return 'The winner is... It\'s a Tie!';
 }
 
-// --- REST endpoints ---
-
-// Create new game
+// Create a new game and return its ID
 app.post('/create', (req, res) => {
-  const id = Math.random().toString(36).substr(2, 6);
+  const id = Math.random().toString(36).slice(2, 8);
   games[id] = newGame();
   res.json({ gameId: id });
 });
 
-// List active games
+// List all active games (for lobby)
 app.get('/games', (req, res) => {
   const list = Object.entries(games).map(([id, g]) => ({
     id,
@@ -57,36 +57,45 @@ app.get('/games', (req, res) => {
   res.json(list);
 });
 
-// Get state
+// Get full state for players
 app.get('/state/:id', (req, res) => {
   const game = games[req.params.id];
   if (!game) return res.status(404).json({ error: 'Game not found' });
   res.json({ ...game, message: game.finished ? winnerMessage(game) : '' });
 });
 
-// Spectate
+// Get full state for spectators (same as state, no role needed)
 app.get('/spectate/:id', (req, res) => {
   const game = games[req.params.id];
   if (!game) return res.status(404).json({ error: 'Game not found' });
   res.json({ ...game, message: game.finished ? winnerMessage(game) : '' });
 });
 
-// Set name
+// Set player name for role A or B
 app.post('/setName/:id', (req, res) => {
   const game = games[req.params.id];
   if (!game) return res.status(404).json({ error: 'Game not found' });
   const { role, name } = req.body;
-  if (role === 'A' || role === 'B') game.names[role] = name || game.names[role];
+  if (role === 'A' || role === 'B') {
+    game.names[role] = (name || '').trim() || game.names[role];
+  }
   res.json(game);
 });
 
-// Choice
+// Submit a choice (red/green) for role A or B
 app.post('/choice/:id', (req, res) => {
   const game = games[req.params.id];
   if (!game) return res.status(404).json({ error: 'Game not found' });
+
   const { role, color } = req.body;
-  if (!game.finished && (role === 'A' || role === 'B')) {
+  if (game.finished) {
+    return res.json({ ...game, message: winnerMessage(game) });
+  }
+
+  if ((role === 'A' || role === 'B') && (color === 'red' || color === 'green')) {
     game.choices[role] = color;
+
+    // If both have chosen, score round and advance
     if (game.choices.A && game.choices.B) {
       applyRules(game);
       game.history.push({
@@ -97,22 +106,25 @@ app.post('/choice/:id', (req, res) => {
         scoreB: game.scoreB
       });
       game.choices = { A: null, B: null };
-      game.round++;
-      if (game.round > MAX_ROUNDS) game.finished = true;
+      game.round += 1;
+      if (game.round > MAX_ROUNDS) {
+        game.finished = true;
+      }
     }
   }
+
   res.json({ ...game, message: game.finished ? winnerMessage(game) : '' });
 });
 
-// Replay
+// Replay: keep names, reset scores/round/history
 app.post('/replay/:id', (req, res) => {
-  const game = games[req.params.id];
-  if (!game) return res.status(404).json({ error: 'Game not found' });
-  games[req.params.id] = { ...newGame(), names: game.names };
+  const old = games[req.params.id];
+  if (!old) return res.status(404).json({ error: 'Game not found' });
+  games[req.params.id] = { ...newGame(), names: old.names };
   res.json(games[req.params.id]);
 });
 
-// Reset
+// Reset: reset everything including names
 app.post('/reset/:id', (req, res) => {
   games[req.params.id] = newGame();
   res.json(games[req.params.id]);
